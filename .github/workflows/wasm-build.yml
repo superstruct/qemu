@@ -154,6 +154,9 @@ jobs:
         sed -i '/HAVE_POSIX_SPAWN/d' meson.build
         sed -i '/HAVE_PTHREAD_GETNAME_NP/d' meson.build
         
+        # Set LDFLAGS to include resolv library explicitly
+        export LDFLAGS="-sWASM_BIGINT -sASYNCIFY=1 -L$TARGET/lib -lresolv"
+        
         meson setup build --cross-file=../../cross.meson --prefix="$TARGET" --default-library=static -Dxattr=false
         ninja -C build install
         cd ../../../
