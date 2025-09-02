@@ -9,6 +9,7 @@ c = 'emcc'
 cpp = 'em++'
 ar = 'emar'
 ranlib = 'emranlib'
+nm = 'emnm'
 pkgconfig = ['pkg-config', '--static']
 [built-in options]
 c_args = ['-O3', '-pthread', '-DWASM_BIGINT', '-Wno-incompatible-function-pointer-types']

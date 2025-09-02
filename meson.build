@@ -4301,7 +4301,9 @@ foreach target : target_dirs
 
     c_args += ['-DCONFIG_DEVICES="@0@-config-devices.h"'.format(target)]
     arch_srcs += config_devices_h[target]
-    link_args += ['@block.syms', '@qemu.syms']
+    if host_os != 'emscripten'
+      link_args += ['@block.syms', '@qemu.syms']
+    endif
   else
     abi = config_target['TARGET_ABI_DIR']
     target_type='user'
@@ -4459,12 +4461,13 @@ foreach target : target_dirs
       exe_name += '-unsigned'
     endif
 
+    link_depends_list = host_os != 'emscripten' ? [block_syms, qemu_syms] : []
     emulator = executable(exe_name, exe['sources'],
                install: true,
                c_args: c_args,
                dependencies: arch_deps + exe['dependencies'],
                objects: lib.extract_all_objects(recursive: true),
-               link_depends: [block_syms, qemu_syms],
+               link_depends: link_depends_list,
                link_args: link_args,
                win_subsystem: exe['win_subsystem'])
 
