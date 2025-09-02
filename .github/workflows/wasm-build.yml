@@ -135,6 +135,15 @@ jobs:
         ninja -C build install
         cd ..
         
+        # Build PCRE2 (required by glib)
+        curl -L -O https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.44/pcre2-10.44.tar.gz
+        [ -s pcre2-10.44.tar.gz ] || { echo "Failed to download pcre2"; exit 1; }
+        tar xf pcre2-10.44.tar.gz
+        cd pcre2-10.44
+        emconfigure ./configure --enable-static --disable-shared --prefix="$TARGET" --disable-cpp
+        emmake make install
+        cd ..
+        
         # Create libresolv stub
         mkdir -p stub
         cat > stub/res_query.c << 'EOF'
