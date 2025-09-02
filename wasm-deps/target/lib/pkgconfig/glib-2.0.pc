@@ -1,0 +1,17 @@
+prefix=/home/isaac/src/superstruct/qemu/wasm-deps/target
+bindir=${prefix}/bin
+datadir=${prefix}/share
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+glib_genmarshal=${bindir}/glib-genmarshal
+gobject_query=${bindir}/gobject-query
+glib_mkenums=${bindir}/glib-mkenums
+glib_valgrind_suppressions=${datadir}/glib-2.0/valgrind/glib.supp
+
+Name: GLib
+Description: C Utility Library
+Version: 2.84.0
+Requires: libpcre2-8
+Libs: -L${libdir} -lglib-2.0 -lm -pthread -sPTHREAD_POOL_SIZE=4
+Cflags: -I${includedir}/glib-2.0 -DPCRE2_STATIC -pthread -I${libdir}/glib-2.0/include

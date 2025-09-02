@@ -1,0 +1,9 @@
+prefix=/home/isaac/src/superstruct/qemu/wasm-deps/target
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: Pixman
+Description: The pixman library (version 1)
+Version: 0.44.2
+Libs: -L${libdir} -lpixman-1 -lm -pthread -sPTHREAD_POOL_SIZE=4
+Cflags: -I${includedir}/pixman-1 -pthread

@@ -1,0 +1,10 @@
+prefix=/home/isaac/src/superstruct/qemu/wasm-deps/target
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: GThread
+Description: Thread support for GLib
+Version: 2.84.0
+Requires: glib-2.0
+Libs: -L${libdir} -lgthread-2.0 -pthread -sPTHREAD_POOL_SIZE=4
+Cflags: -I${includedir} -pthread
