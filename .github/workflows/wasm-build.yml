@@ -142,7 +142,8 @@ jobs:
             return -1;
         }
         EOF
-        emar rcs "$TARGET/lib/libresolv.a" stub/res_query.c
+        emcc -c stub/res_query.c -o stub/res_query.o
+        emar rcs "$TARGET/lib/libresolv.a" stub/res_query.o
         
         # Build glib with patches
         curl -L -O https://download.gnome.org/sources/glib/2.84/glib-2.84.0.tar.xz
