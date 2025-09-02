@@ -256,12 +256,27 @@ jobs:
         ls -la
         sha256sum *.tar.gz > checksums.txt
         
+    - name: Generate Build Version
+      id: version
+      run: |
+        chmod +x .github/version-helper.sh
+        VERSION=$(./.github/version-helper.sh auto)
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "📦 Build Version: $VERSION"
+        
     - name: Generate Release Notes
       run: |
-        cat > release/RELEASE_NOTES.md << 'EOF'
-        # QEMU WebAssembly Build
+        VERSION="${{ steps.version.outputs.version }}"
+        QEMU_VERSION=$(git describe --tags --abbrev=0 --match="v*" 2>/dev/null || echo "v10.1.0")
+        cat > release/RELEASE_NOTES.md << EOF
+        # QEMU WebAssembly Build $VERSION
         
         This release contains unofficial WebAssembly builds of QEMU utilities and system emulators.
+        
+        **Base QEMU Version:** $QEMU_VERSION  
+        **WebAssembly Build:** $VERSION  
+        **Build Date:** $(date -u)  
+        **Commit:** ${{ github.sha }}
         
         ## What's Included
         
@@ -306,7 +321,7 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
-        name: "QEMU WebAssembly ${{ github.ref_name }}"
+        name: "QEMU WebAssembly ${{ steps.version.outputs.version }}"
         body_path: release/RELEASE_NOTES.md
         files: |
           release/*.tar.gz
