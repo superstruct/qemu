@@ -153,7 +153,7 @@ jobs:
         sed -i '/HAVE_POSIX_SPAWN/d' meson.build
         sed -i '/HAVE_PTHREAD_GETNAME_NP/d' meson.build
         
-        meson setup build --cross-file=../../cross.meson --prefix="$TARGET" --default-library=static
+        meson setup build --cross-file=../../cross.meson --prefix="$TARGET" --default-library=static -Dxattr=false
         ninja -C build install
         cd ../../../
         
