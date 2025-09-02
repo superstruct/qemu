@@ -113,13 +113,15 @@ jobs:
         emmake make install
         cd ..
         
-        # Build libffi (with retry and alternative sources)
+        # Build libffi (with retry and alternative sources)  
         curl -L -O https://github.com/libffi/libffi/releases/download/v3.4.7/libffi-3.4.7.tar.gz || \
         curl -L -O https://sourceware.org/pub/libffi/libffi-3.4.7.tar.gz
         [ -s libffi-3.4.7.tar.gz ] || { echo "Failed to download libffi"; exit 1; }
         tar xf libffi-3.4.7.tar.gz
         cd libffi-3.4.7
-        emconfigure ./configure --host=wasm32-unknown-linux --enable-static --disable-shared --prefix="$TARGET"
+        # Fix configure script path issue
+        export SRCDIR="$PWD"
+        emconfigure ./configure --host=wasm32-unknown-linux --enable-static --disable-shared --prefix="$TARGET" --srcdir="$SRCDIR"
         emmake make install
         cd ..
         
