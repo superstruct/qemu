@@ -129,7 +129,9 @@ jobs:
         curl -L -O https://cairographics.org/releases/pixman-0.44.2.tar.gz
         tar xf pixman-0.44.2.tar.gz
         cd pixman-0.44.2
-        meson setup build --cross-file=../../cross.meson --prefix="$TARGET" --default-library=static
+        # Create cross file with dynamic TARGET path
+        sed "s|@TARGET@|$TARGET|g" ../../cross.meson > cross-dynamic.meson
+        meson setup build --cross-file=cross-dynamic.meson --prefix="$TARGET" --default-library=static
         ninja -C build install
         cd ..
         
@@ -157,7 +159,9 @@ jobs:
         # Set LDFLAGS to include resolv library explicitly
         export LDFLAGS="-sWASM_BIGINT -sASYNCIFY=1 -L$TARGET/lib -lresolv"
         
-        meson setup build --cross-file=../../cross.meson --prefix="$TARGET" --default-library=static -Dxattr=false
+        # Create cross file with dynamic TARGET path
+        sed "s|@TARGET@|$TARGET|g" ../../cross.meson > cross-dynamic.meson
+        meson setup build --cross-file=cross-dynamic.meson --prefix="$TARGET" --default-library=static -Dxattr=false
         ninja -C build install
         cd ../../../
         
