@@ -19,7 +19,7 @@ on:
         type: boolean
 
 env:
-  EMSCRIPTEN_VERSION: "4.0.13"
+  EMSCRIPTEN_VERSION: "4.0.14"
   
 jobs:
   build-wasm:
