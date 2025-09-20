@@ -129,7 +129,18 @@ int qemu_kill_thread(int tid, int sig)
 
 int qemu_daemon(int nochdir, int noclose)
 {
+#ifdef EMSCRIPTEN
+    /* daemon() is not available in Emscripten/WASM environment.
+     * WASM applications run in browser/Node.js and don't support daemonizing.
+     * Return 0 (success) to indicate the operation completed successfully.
+     * 
+     * WASM compatibility modification by Superstruct Ltd, New Zealand (2025)
+     * Licensed under the same license as the underlying QEMU project (GNU GPL v2)
+     */
+    return 0;
+#else
     return daemon(nochdir, noclose);
+#endif
 }
 
 bool qemu_write_pidfile(const char *path, Error **errp)

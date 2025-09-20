@@ -1,0 +1,359 @@
+# QEMU WebAssembly Build Workflow
+# Copyright (c) 2025 Superstruct Ltd, New Zealand
+# Licensed under the same license as the underlying QEMU project (GNU GPL v2)
+
+name: QEMU WebAssembly Build
+
+on:
+  push:
+    branches: [ master, wasm-* ]
+    tags: [ 'v*', 'wasm-*' ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create GitHub release'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  EMSCRIPTEN_VERSION: "4.0.14"
+  
+jobs:
+  build-wasm:
+    name: Build QEMU WebAssembly
+    runs-on: ubuntu-24.04
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: "utilities"
+            configure_args: "--disable-system --disable-user --enable-tools"
+            outputs: "qemu-img qemu-io qemu-nbd qemu-edid"
+          - name: "system-emulators" 
+            configure_args: "--disable-user --disable-tools --enable-system --target-list=i386-softmmu,arm-softmmu"
+            outputs: "qemu-system-i386 qemu-system-arm"
+    
+    steps:
+    - name: Checkout QEMU
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+        
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          ninja-build \
+          pkg-config \
+          libglib2.0-dev-bin \
+          python3-pip \
+          python3-venv \
+          git \
+          curl
+        pip3 install meson==1.5.0
+
+    - name: Cache Emscripten SDK
+      id: cache-emsdk
+      uses: actions/cache@v3
+      with:
+        path: emsdk
+        key: emsdk-${{ env.EMSCRIPTEN_VERSION }}
+        
+    - name: Setup Emscripten SDK
+      if: steps.cache-emsdk.outputs.cache-hit != 'true'
+      run: |
+        git clone https://github.com/emscripten-core/emsdk.git
+        cd emsdk
+        ./emsdk install ${{ env.EMSCRIPTEN_VERSION }}
+        
+    - name: Activate Emscripten
+      run: |
+        cd emsdk
+        ./emsdk activate ${{ env.EMSCRIPTEN_VERSION }}
+        source ./emsdk_env.sh
+        echo "$PWD/upstream/emscripten" >> $GITHUB_PATH
+        
+    - name: Cache WASM Dependencies
+      id: cache-wasm-deps
+      uses: actions/cache@v3
+      with:
+        path: wasm-deps/target
+        key: wasm-deps-${{ hashFiles('wasm-deps/cross.meson') }}
+        restore-keys: |
+          wasm-deps-
+          
+    - name: Build WASM Dependencies
+      if: steps.cache-wasm-deps.outputs.cache-hit != 'true'
+      run: |
+        set -e  # Exit on any error
+        source emsdk/emsdk_env.sh
+        export TARGET="$PWD/wasm-deps/target"
+        export PKG_CONFIG_LIBDIR="$TARGET/lib/pkgconfig"
+        export CFLAGS="-O3 -pthread -DWASM_BIGINT"
+        export LDFLAGS="-sWASM_BIGINT -sASYNCIFY=1 -L$TARGET/lib"
+        
+        # Create target directory
+        mkdir -p "$TARGET"/{lib,include}
+        mkdir -p wasm-deps/build
+        
+        # Build zlib
+        cd wasm-deps/build
+        curl -L -O https://www.zlib.net/zlib-1.3.1.tar.gz
+        [ -s zlib-1.3.1.tar.gz ] || { echo "Failed to download zlib"; exit 1; }
+        tar xf zlib-1.3.1.tar.gz
+        cd zlib-1.3.1
+        emconfigure ./configure --static --prefix="$TARGET"
+        emmake make install
+        cd ..
+        
+        # Build libffi (with retry and alternative sources)  
+        curl -L -O https://github.com/libffi/libffi/releases/download/v3.4.7/libffi-3.4.7.tar.gz || \
+        curl -L -O https://sourceware.org/pub/libffi/libffi-3.4.7.tar.gz
+        [ -s libffi-3.4.7.tar.gz ] || { echo "Failed to download libffi"; exit 1; }
+        tar xf libffi-3.4.7.tar.gz
+        cd libffi-3.4.7
+        # Fix configure script path issue
+        export SRCDIR="$PWD"
+        emconfigure ./configure --host=wasm32-unknown-linux --enable-static --disable-shared --prefix="$TARGET" --srcdir="$SRCDIR"
+        emmake make install
+        cd ..
+        
+        # Build pixman
+        curl -L -O https://cairographics.org/releases/pixman-0.44.2.tar.gz
+        tar xf pixman-0.44.2.tar.gz
+        cd pixman-0.44.2
+        # Create cross file with dynamic TARGET path
+        sed "s|@TARGET@|$TARGET|g" ../../cross.meson > cross-dynamic.meson
+        meson setup build --cross-file=cross-dynamic.meson --prefix="$TARGET" --default-library=static
+        ninja -C build install
+        cd ..
+        
+        # Build PCRE2 (required by glib)
+        curl -L -O https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.44/pcre2-10.44.tar.gz
+        [ -s pcre2-10.44.tar.gz ] || { echo "Failed to download pcre2"; exit 1; }
+        tar xf pcre2-10.44.tar.gz
+        cd pcre2-10.44
+        emconfigure ./configure --enable-static --disable-shared --prefix="$TARGET" --disable-cpp
+        emmake make install
+        cd ..
+        
+        # Create libresolv stub
+        mkdir -p stub
+        cat > stub/res_query.c << 'EOF'
+        #include <netdb.h>
+        int res_query(const char *name, int class, int type, unsigned char *dest, int len) {
+            h_errno = HOST_NOT_FOUND;
+            return -1;
+        }
+        EOF
+        emcc -c stub/res_query.c -o stub/res_query.o
+        emar rcs "$TARGET/lib/libresolv.a" stub/res_query.o
+        
+        # Build glib with patches
+        curl -L -O https://download.gnome.org/sources/glib/2.84/glib-2.84.0.tar.xz
+        tar xf glib-2.84.0.tar.xz
+        cd glib-2.84.0
+        
+        # Apply pthread patches
+        sed -i '/HAVE_POSIX_SPAWN/d' meson.build
+        sed -i '/HAVE_PTHREAD_GETNAME_NP/d' meson.build
+        
+        # Set LDFLAGS to include resolv library explicitly
+        export LDFLAGS="-sWASM_BIGINT -sASYNCIFY=1 -L$TARGET/lib -lresolv"
+        
+        # Create cross file with dynamic TARGET path
+        sed "s|@TARGET@|$TARGET|g" ../../cross.meson > cross-dynamic.meson
+        meson setup build --cross-file=cross-dynamic.meson --prefix="$TARGET" --default-library=static -Dxattr=false
+        ninja -C build install
+        cd ../../../
+        
+    - name: Configure QEMU WASM Build
+      run: |
+        source emsdk/emsdk_env.sh
+        export TARGET="$PWD/wasm-deps/target"
+        export PKG_CONFIG_LIBDIR="$TARGET/lib/pkgconfig"
+        export CFLAGS="-O3 -pthread -DWASM_BIGINT"
+        export LDFLAGS="-sWASM_BIGINT -sASYNCIFY=1 -L$TARGET/lib"
+        
+        mkdir -p build-wasm
+        cd build-wasm
+        
+        ../configure \
+          --cross-prefix= \
+          --cc=emcc \
+          --cxx=em++ \
+          --ar=emar \
+          --ranlib=emranlib \
+          --with-coroutine=wasm \
+          --enable-tcg-interpreter \
+          --disable-kvm \
+          --disable-xen \
+          --disable-vnc \
+          --disable-gtk \
+          --disable-sdl \
+          --disable-curl \
+          --disable-libssh \
+          --disable-png \
+          --disable-jpeg \
+          --disable-zstd \
+          ${{ matrix.target.configure_args }}
+          
+    - name: Build QEMU WASM
+      run: |
+        source emsdk/emsdk_env.sh
+        cd build-wasm
+        ninja ${{ matrix.target.outputs }}
+        
+    - name: Prepare Artifacts
+      run: |
+        mkdir -p artifacts/${{ matrix.target.name }}
+        cd build-wasm
+        for target in ${{ matrix.target.outputs }}; do
+          if [ -f "${target}.js" ] && [ -f "${target}.wasm" ]; then
+            cp "${target}.js" "${target}.wasm" ../artifacts/${{ matrix.target.name }}/
+            echo "✅ Built ${target}.js/.wasm"
+          fi
+        done
+        cd ../artifacts
+        ls -la ${{ matrix.target.name }}/
+        
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: qemu-wasm-${{ matrix.target.name }}
+        path: artifacts/${{ matrix.target.name }}/
+        retention-days: 30
+        
+    - name: Generate Build Info
+      run: |
+        cd artifacts/${{ matrix.target.name }}
+        echo "# QEMU WebAssembly Build - ${{ matrix.target.name }}" > BUILD_INFO.md
+        echo "" >> BUILD_INFO.md
+        echo "**Build Date:** $(date -u)" >> BUILD_INFO.md
+        echo "**Commit:** ${{ github.sha }}" >> BUILD_INFO.md  
+        echo "**Emscripten:** ${{ env.EMSCRIPTEN_VERSION }}" >> BUILD_INFO.md
+        echo "" >> BUILD_INFO.md
+        echo "## Files" >> BUILD_INFO.md
+        for file in *.js *.wasm; do
+          if [ -f "$file" ]; then
+            size=$(stat -c%s "$file" | numfmt --to=iec)
+            echo "- \`$file\` ($size)" >> BUILD_INFO.md
+          fi
+        done
+
+  create-release:
+    name: Create Release
+    needs: [build-wasm]
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true'
+    
+    steps:
+    - name: Download All Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: release-artifacts
+        
+    - name: Prepare Release Assets
+      run: |
+        mkdir -p release
+        cd release-artifacts
+        
+        # Create combined archive
+        tar czf ../release/qemu-wasm-full.tar.gz qemu-wasm-*
+        
+        # Create individual archives
+        for dir in qemu-wasm-*; do
+          if [ -d "$dir" ]; then
+            tar czf "../release/${dir}.tar.gz" "$dir"
+          fi
+        done
+        
+        cd ../release
+        ls -la
+        sha256sum *.tar.gz > checksums.txt
+        
+    - name: Generate Build Version
+      id: version
+      run: |
+        chmod +x .github/version-helper.sh
+        VERSION=$(./.github/version-helper.sh auto)
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "📦 Build Version: $VERSION"
+        
+    - name: Generate Release Notes
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        QEMU_VERSION=$(git describe --tags --abbrev=0 --match="v*" 2>/dev/null || echo "v10.1.0")
+        cat > release/RELEASE_NOTES.md << EOF
+        # QEMU WebAssembly Build $VERSION
+        
+        This release contains unofficial WebAssembly builds of QEMU utilities and system emulators.
+        
+        **Base QEMU Version:** $QEMU_VERSION  
+        **WebAssembly Build:** $VERSION  
+        **Build Date:** $(date -u)  
+        **Commit:** ${{ github.sha }}
+        
+        ## What's Included
+        
+        ### QEMU Utilities (~16MB total)
+        - `qemu-img.js/.wasm` - Disk image manipulation utility
+        - `qemu-io.js/.wasm` - Disk I/O testing utility  
+        - `qemu-nbd.js/.wasm` - Network Block Device server
+        - `qemu-edid.js/.wasm` - EDID utility
+        
+        ### System Emulators (~72MB total)
+        - `qemu-system-i386.js/.wasm` - x86 system emulator
+        - `qemu-system-arm.js/.wasm` - ARM system emulator
+        
+        ## Usage
+        
+        ### Browser
+        ```javascript
+        import Module from './qemu-system-i386.js';
+        const qemu = await Module();
+        // Use qemu instance
+        ```
+        
+        ### Node.js
+        ```javascript
+        const Module = require('./qemu-system-i386.js');
+        Module().then(qemu => {
+            // Use qemu instance
+        });
+        ```
+        
+        ## Build Information
+        - **Emscripten:** 4.0.13
+        - **WebAssembly:** MVP format
+        - **Features:** TCG interpreter, WASM coroutines, ASYNCIFY support
+        - **Dependencies:** Cross-compiled zlib, libffi, pixman, glib
+        
+        ## ⚠️ Experimental
+        These are unofficial experimental builds. Use at your own risk.
+        EOF
+        
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: "QEMU WebAssembly ${{ steps.version.outputs.version }}"
+        body_path: release/RELEASE_NOTES.md
+        files: |
+          release/*.tar.gz
+          release/checksums.txt
+        draft: false
+        prerelease: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
